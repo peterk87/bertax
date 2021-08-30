@@ -26,10 +26,13 @@ def parse_arguments():
                         help='Don\'t open generated HTML view in Browser')
     return parser.parse_args()
 
+
 def keras2torch(kmodel,
-                params={'embed_dim': 250, 'seq_len': 502, 'transformer_num': 12,
-                        'head_num': 5, 'feed_forward_dim': 1024,
-                        'dropout_rate': 0.05, 'vocab_size': 69}):
+                params=None):
+    if params is None:
+        params = {'embed_dim': 250, 'seq_len': 502, 'transformer_num': 12,
+                  'head_num': 5, 'feed_forward_dim': 1024,
+                  'dropout_rate': 0.05, 'vocab_size': 69}
     tmodel = BertModel(BertConfig(vocab_size=params['vocab_size'],
                                   hidden_size=params['embed_dim'],
                                   num_attention_heads=params['head_num'],
@@ -42,11 +45,13 @@ def keras2torch(kmodel,
     # set torch model tensors to the ones from the keras model
     td = {t[0]: t[1] for t in tmodel.named_parameters()}
     kd = {t.name: t for t in kmodel.weights}
+
     def set_tensor(tname, karray):
-        assert (tshape:=td[tname].detach().numpy().shape) == (
-            kshape:=karray.shape), f'{tname} has incompatible shape: {tshape} != {kshape}'
+        assert (tshape := td[tname].detach().numpy().shape) == (
+            kshape := karray.shape), f'{tname} has incompatible shape: {tshape} != {kshape}'
         with torch.no_grad():
             td[tname].data = torch.nn.Parameter(torch.Tensor(karray))
+
     # 1 INPUT
     t_pfix = 'embeddings.'
     k_pfix = 'Embedding-'
@@ -59,11 +64,11 @@ def keras2torch(kmodel,
     # 2 LAYERS
     for i in range(params['transformer_num']):
         t_pfix_l = f'encoder.layer.{i}.'
-        k_pfix_l = f'Encoder-{i+1}-'
+        k_pfix_l = f'Encoder-{i + 1}-'
         # SELF-ATTENTION
         # NOTE: (embed_dim x embed_dim) matrices have to be transposed!
         t_pfix = t_pfix_l + 'attention.'
-        k_pfix = k_pfix_l + f'MultiHeadSelfAttention/Encoder-{i+1}-MultiHeadSelfAttention_'
+        k_pfix = k_pfix_l + f'MultiHeadSelfAttention/Encoder-{i + 1}-MultiHeadSelfAttention_'
         set_tensor(t_pfix + 'self.query.weight', kd[k_pfix + 'Wq:0'].numpy().transpose())
         set_tensor(t_pfix + 'self.query.bias', kd[k_pfix + 'bq:0'].numpy())
         set_tensor(t_pfix + 'self.key.weight', kd[k_pfix + 'Wk:0'].numpy().transpose())
@@ -81,11 +86,11 @@ def keras2torch(kmodel,
         t_pfix = t_pfix_l + ''
         k_pfix = k_pfix_l + 'FeedForward'
         set_tensor(t_pfix + 'intermediate.dense.weight',
-                   kd[k_pfix + f'/Encoder-{i+1}-FeedForward_W1:0'].numpy().transpose())
-        set_tensor(t_pfix + 'intermediate.dense.bias', kd[k_pfix + f'/Encoder-{i+1}-FeedForward_b1:0'].numpy())
+                   kd[k_pfix + f'/Encoder-{i + 1}-FeedForward_W1:0'].numpy().transpose())
+        set_tensor(t_pfix + 'intermediate.dense.bias', kd[k_pfix + f'/Encoder-{i + 1}-FeedForward_b1:0'].numpy())
         set_tensor(t_pfix + 'output.dense.weight',
-                   kd[k_pfix + f'/Encoder-{i+1}-FeedForward_W2:0'].numpy().transpose())
-        set_tensor(t_pfix + 'output.dense.bias', kd[k_pfix + f'/Encoder-{i+1}-FeedForward_b2:0'].numpy())
+                   kd[k_pfix + f'/Encoder-{i + 1}-FeedForward_W2:0'].numpy().transpose())
+        set_tensor(t_pfix + 'output.dense.bias', kd[k_pfix + f'/Encoder-{i + 1}-FeedForward_b2:0'].numpy())
         set_tensor(t_pfix + 'output.LayerNorm.weight', kd[k_pfix + '-Norm/gamma:0'].numpy())
         set_tensor(t_pfix + 'output.LayerNorm.bias', kd[k_pfix + '-Norm/beta:0'].numpy())
     # 3 OUTPUT (before class)
@@ -93,11 +98,13 @@ def keras2torch(kmodel,
     set_tensor('pooler.dense.bias', kd['NSP-Dense/bias:0'].numpy())
     return tmodel
 
+
 def js_data(tmodel, in_ids, tokend):
     out = tmodel(input_ids=torch.tensor(np.array([in_ids]), dtype=torch.long), output_attentions=True)
     attn = bertviz.util.format_attention(out[-1]).tolist()
     tokens = list(map({v: k for k, v in tokend.items()}.__getitem__, in_ids))
     return {'attn': attn, 'left_text': tokens, 'right_text': tokens}
+
 
 def ins_json(tmodel, in_ids, tokend, out_handle):
     out_handle.write('PYTHON_PARAMS = ');
@@ -106,6 +113,7 @@ def ins_json(tmodel, in_ids, tokend, out_handle):
                'attention': {'all': js_data(tmodel, in_ids, tokend)}},
               out_handle, indent=2)
 
+
 def get_view_js_lines(mode):
     # NOTE: due to an incompatibility in the only available pypi version of bertviz, the
     # script has to be read in and inserted into the HTML
@@ -113,6 +121,7 @@ def get_view_js_lines(mode):
     view_js_location = os.path.join(bertviz.__path__[0], f'{mode}_view.js')
     return ('<script>' + re.sub(r'require.config\(.[^\)]+\);', '', open(view_js_location).read())
             + '</script>')
+
 
 def main():
     args = parse_arguments()
@@ -129,7 +138,7 @@ def main():
     args.n = min(min(args.n, np.ceil(len(seq)).astype(int)), (model_len - 1) * 3)
     # converted 🤗 transformers model
     tm = keras2torch(m)
-    _ = tm.eval()                   # toggle evaluation mode, no output
+    _ = tm.eval()  # toggle evaluation mode, no output
     # whole sequence to tokens
     ins = seq2tokens(seq[args.a:(args.a + args.n)], tokend,
                      np.ceil(args.n / 3 + 1).astype(int))
@@ -159,11 +168,12 @@ def main():
         <script src="view_data.js"></script>
         %s
       </body>
-    </html>"""%(view_js_lines)
+    </html>""" % (view_js_lines)
     with open('view_model.html', 'w') as f:
         f.write(html)
     if (not args.dont_open):
         webbrowser.open('view_model.html')
+
 
 if __name__ == '__main__':
     main()
